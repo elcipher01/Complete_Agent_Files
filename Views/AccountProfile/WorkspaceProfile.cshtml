@@ -1,0 +1,151 @@
+@{
+    ViewData["Title"] = "Account Profile";
+    var fullName = Context.Session.GetString("FullName") ?? Context.Session.GetString("Username") ?? "User";
+    var username = Context.Session.GetString("Username") ?? "N/A";
+    var email = Context.Session.GetString("Email") ?? "N/A";
+    var userType = Context.Session.GetString("UserType") ?? "N/A";
+    var layoutPath = string.Equals(userType, "QA Analyst", StringComparison.OrdinalIgnoreCase)
+        || string.Equals(userType, "QA Head", StringComparison.OrdinalIgnoreCase)
+        ? "~/Views/Shared/_QALayout.cshtml"
+        : "~/Views/Shared/_AgentLayout.cshtml";
+    Layout = layoutPath;
+}
+
+@section Styles {
+    <link rel="stylesheet" href="~/css/workspace-profile.css" asp-append-version="true" />
+}
+
+<section class="workspace-profile-page">
+    <div class="workspace-profile-shell">
+        <header class="workspace-profile-head">
+            <h1>Account Profile</h1>
+            <p>Manage your profile details and change your password.</p>
+        </header>
+
+        <div class="workspace-profile-grid">
+            <article class="workspace-card">
+                <h2>Profile Details</h2>
+                <div class="workspace-meta">
+                    <div class="workspace-meta-row">
+                        <span class="workspace-meta-label">Full name</span>
+                        <span class="workspace-meta-value">@fullName</span>
+                    </div>
+                    <div class="workspace-meta-row">
+                        <span class="workspace-meta-label">Username</span>
+                        <span class="workspace-meta-value">@username</span>
+                    </div>
+                    <div class="workspace-meta-row">
+                        <span class="workspace-meta-label">Email</span>
+                        <span class="workspace-meta-value">@email</span>
+                    </div>
+                    <div class="workspace-meta-row">
+                        <span class="workspace-meta-label">Role</span>
+                        <span class="workspace-meta-value">@userType</span>
+                    </div>
+                </div>
+            </article>
+
+            <article class="workspace-card">
+                <h2>Change Password</h2>
+                <form id="workspace-password-form" class="workspace-password-form" novalidate>
+                    <label for="currentPassword">Current password</label>
+                    <div class="workspace-password-input-wrap">
+                        <input id="currentPassword" type="password" autocomplete="current-password" required />
+                        <button type="button" class="workspace-password-toggle" data-target="currentPassword" aria-label="Show password">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+
+                    <label for="newPassword">New password</label>
+                    <div class="workspace-password-input-wrap">
+                        <input id="newPassword" type="password" autocomplete="new-password" minlength="8" required />
+                        <button type="button" class="workspace-password-toggle" data-target="newPassword" aria-label="Show password">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+
+                    <label for="confirmPassword">Confirm new password</label>
+                    <div class="workspace-password-input-wrap">
+                        <input id="confirmPassword" type="password" autocomplete="new-password" minlength="8" required />
+                        <button type="button" class="workspace-password-toggle" data-target="confirmPassword" aria-label="Show password">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
+
+                    <button type="submit" class="workspace-btn">Update Password</button>
+                    <div id="workspace-password-status" class="workspace-status" aria-live="polite"></div>
+                </form>
+            </article>
+        </div>
+    </div>
+</section>
+
+@section Scripts {
+    <script>
+        (function () {
+            const form = document.getElementById('workspace-password-form');
+            const statusEl = document.getElementById('workspace-password-status');
+            const toggles = document.querySelectorAll('.workspace-password-toggle');
+
+            function setStatus(message, type) {
+                statusEl.textContent = message || '';
+                statusEl.className = 'workspace-status ' + (type || '');
+            }
+
+            toggles.forEach(function (toggle) {
+                toggle.addEventListener('click', function () {
+                    const inputId = toggle.getAttribute('data-target');
+                    const input = document.getElementById(inputId);
+                    const icon = toggle.querySelector('i');
+                    if (!input || !icon) return;
+
+                    const show = input.type === 'password';
+                    input.type = show ? 'text' : 'password';
+                    icon.className = show ? 'bi bi-eye-slash' : 'bi bi-eye';
+                    toggle.setAttribute('aria-label', show ? 'Hide password' : 'Show password');
+                });
+            });
+
+            form.addEventListener('submit', async function (event) {
+                event.preventDefault();
+
+                const currentPassword = document.getElementById('currentPassword').value.trim();
+                const newPassword = document.getElementById('newPassword').value.trim();
+                const confirmPassword = document.getElementById('confirmPassword').value.trim();
+
+                if (!currentPassword || !newPassword || !confirmPassword) {
+                    setStatus('All password fields are required.', 'error');
+                    return;
+                }
+                if (newPassword.length < 8) {
+                    setStatus('New password must be at least 8 characters.', 'error');
+                    return;
+                }
+                if (newPassword !== confirmPassword) {
+                    setStatus('New password and confirmation do not match.', 'error');
+                    return;
+                }
+
+                setStatus('Updating password...', 'info');
+
+                try {
+                    const response = await fetch('/AccountProfile/ChangeWorkspacePassword', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ currentPassword, newPassword, confirmPassword })
+                    });
+                    const result = await response.json();
+                    if (!response.ok || !result.success) {
+                        setStatus(result.message || 'Unable to update password.', 'error');
+                        return;
+                    }
+
+                    form.reset();
+                    setStatus(result.message || 'Password changed successfully.', 'success');
+                } catch (error) {
+                    setStatus('Unable to update password right now.', 'error');
+                }
+            });
+        })();
+    </script>
+}

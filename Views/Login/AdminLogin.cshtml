@@ -42,7 +42,7 @@
             <form id="mainLoginForm">
                 <div class="mb-3">
                     <label class="form-label">Username</label>
-                    <input type="text" class="form-control" placeholder="USR-000-000" required>
+                    <input id="username" type="text" class="form-control" placeholder="USR-000-000" required>
                 </div>
 
                 <div class="mb-3">
@@ -50,7 +50,12 @@
                         <label class="form-label mb-0">Password</label>
                         <a href="#" class="forgot-link" data-bs-toggle="modal" data-bs-target="#forgotPasswordModal">Forgot Password?</a>
                     </div>
-                    <input type="password" class="form-control" placeholder="••••••••" required>
+                    <div class="login-password-wrap">
+                        <input id="password" type="password" class="form-control" placeholder="••••••••" required>
+                        <button class="login-password-toggle" type="button" onclick="togglePassword('password', this)" aria-label="Show password">
+                            <i class="bi bi-eye"></i>
+                        </button>
+                    </div>
                 </div>
 
                 <button type="submit" class="btn btn-access">ACCESS PORTAL</button>

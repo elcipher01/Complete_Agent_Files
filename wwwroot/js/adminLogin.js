@@ -20,8 +20,8 @@ function showToast(message, isSuccess = true) {
 document.getElementById('mainLoginForm').addEventListener('submit', async function(e) {
     e.preventDefault();
     
-    const username = document.querySelector('input[type="text"]').value;
-    const password = document.querySelector('input[type="password"]').value;
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
     
     if (!username || !password) {
         showToast('Please enter both username and password', false);

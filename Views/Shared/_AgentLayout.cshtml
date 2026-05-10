@@ -615,7 +615,7 @@
 
                             <!-- Profile Dropdown Menu -->
                             <div class="profile-dropdown" id="profile-dropdown">
-                                <a href="#" class="profile-dropdown-item" onclick="handleAccountProfile(event)">
+                                <a href="/AccountProfile/WorkspaceProfile" class="profile-dropdown-item" onclick="handleAccountProfile(event)">
                                     <i class="bi bi-person"></i> Account Profile
                                 </a>
                                 <button class="profile-dropdown-item" onclick="handleReport(event)" type="button">
@@ -714,8 +714,7 @@
         // Handle Account Profile
         function handleAccountProfile(e) {
             e.preventDefault();
-            console.log('Account Profile clicked');
-            // window.location.href = '/Agent/AccountProfile';
+            window.location.href = '/AccountProfile/WorkspaceProfile';
         }
 
         // Handle Report

@@ -84,6 +84,35 @@ body {
         box-shadow: none !important;
     }
 
+.login-password-wrap {
+    position: relative;
+}
+
+.login-password-wrap .form-control {
+    padding-right: 44px;
+}
+
+.login-password-toggle {
+    position: absolute;
+    top: 50%;
+    right: 10px;
+    transform: translateY(-50%);
+    border: 0;
+    background: transparent;
+    color: #6c757d;
+    padding: 0;
+    line-height: 1;
+}
+
+.login-password-toggle:hover {
+    color: #000;
+}
+
+.login-password-toggle:focus {
+    outline: none;
+    color: #000;
+}
+
 /* Dropdown Styles */
 .dropdown-toggle-custom {
     width: 100%;

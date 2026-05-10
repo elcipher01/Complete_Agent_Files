@@ -619,8 +619,11 @@
                         </svg>
                     </button>
                     <div class="profile-dropdown" id="profile-dropdown">
+                        <a href="@Url.Action("WorkspaceProfile", "AccountProfile")" class="profile-dropdown-item">
+                            <i class="bi bi-person-badge"></i> Account Profile
+                        </a>
                         <a href="@Url.Action("Dashboard", "QA")" class="profile-dropdown-item">
-                            <i class="bi bi-person-badge"></i> @qaUserName
+                            <i class="bi bi-grid-1x2"></i> @qaUserName
                         </a>
                         <a href="@Url.Action("Logout", "Login")" class="profile-dropdown-item profile-dd-logout">
                             <i class="bi bi-box-arrow-right"></i> Log out
@@ -933,5 +936,6 @@
             }
         });
     </script>
+    @await RenderSectionAsync("Scripts", required: false)
 </body>
 </html>
