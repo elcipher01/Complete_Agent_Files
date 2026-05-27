@@ -1031,6 +1031,59 @@ END";
         }
 
         [HttpPost]
+        public async Task<IActionResult> LogoutAgent()
+        {
+            var userId = HttpContext.Session.GetInt32("UserId") ?? 0;
+            var staffId = HttpContext.Session.GetInt32("StaffId") ?? 0;
+            var agentName = ResolveAgentName(string.Empty);
+
+            if (userId == 0 && staffId > 0)
+            {
+                var staffInfo = await _context.StaffInfo
+                    .AsNoTracking()
+                    .Where(s => s.StaffId == staffId)
+                    .Select(s => new { s.UserId, s.FirstName, s.LastName, s.Username })
+                    .FirstOrDefaultAsync();
+
+                if (staffInfo != null)
+                {
+                    if (userId == 0)
+                        userId = staffInfo.UserId;
+
+                    if (!IsUsableAgentName(agentName))
+                    {
+                        var fullName = string.Join(" ", new[] { staffInfo.FirstName, staffInfo.LastName }
+                            .Where(name => !string.IsNullOrWhiteSpace(name)));
+                        if (IsUsableAgentName(fullName))
+                            agentName = fullName;
+                        else if (IsUsableAgentName(staffInfo.Username))
+                            agentName = staffInfo.Username;
+                    }
+                }
+            }
+
+            userId = await ResolveAgentUserIdAsync(userId, agentName);
+
+            if (userId == 0 && !IsUsableAgentName(agentName))
+                return BadRequest(new { success = false, message = "Agent identity is required." });
+
+            var normalizedAgentStatus = NormalizeAgentStatus("eos");
+            var derivedChatStatus = AgentStatusToChatStatus(normalizedAgentStatus) ?? "Unavailable";
+
+            await UpdateAllChatSlotAgentStatusAsync(agentName, userId, normalizedAgentStatus);
+            await UpdateAllChatSlotChatStatusAsync(agentName, userId, derivedChatStatus);
+
+            if (userId > 0 || IsUsableAgentName(agentName))
+            {
+                await UpsertAgentStatusRowsAsync(userId, agentName, normalizedAgentStatus);
+                await UpdateAgentRowsStatusAsync(userId, agentName, normalizedAgentStatus, derivedChatStatus);
+            }
+            await ForceAgentLogoutStatusAsync(userId, staffId, agentName, normalizedAgentStatus, derivedChatStatus);
+
+            return Json(new { success = true });
+        }
+
+        [HttpPost]
         public async Task<IActionResult> UpdateAgentStatusDirect(string status, int agentUserId, string agentName)
         {
             if (string.IsNullOrWhiteSpace(status))
@@ -1333,6 +1386,51 @@ BEGIN
     END
 END";
                 await _context.Database.ExecuteSqlRawAsync(sql, agentStatus, agentName, userId);
+            }
+        }
+
+        private async Task UpdateAllChatSlotChatStatusAsync(string agentName, int userId, string chatStatus)
+        {
+            for (var slot = 1; slot <= 3; slot++)
+            {
+                var tableName = $"dbo.ChatSlot_{slot}";
+                var sql = $@"
+IF OBJECT_ID('{tableName}', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('{tableName}', 'ChatStatus') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET ChatStatus = {{0}}
+        WHERE ({{2}} > 0 AND AgentId = {{2}})
+           OR ({{2}} <= 0 AND (
+                LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = LOWER(LTRIM(RTRIM({{1}})))
+                OR LOWER(ISNULL(AgentName, '')) LIKE '%' + LOWER(LTRIM(RTRIM({{1}}))) + '%'
+           ));
+    END
+
+    IF COL_LENGTH('{tableName}', 'ChatStatusLastUpdatedAt') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET ChatStatusLastUpdatedAt = GETDATE()
+        WHERE ({{2}} > 0 AND AgentId = {{2}})
+           OR ({{2}} <= 0 AND (
+                LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = LOWER(LTRIM(RTRIM({{1}})))
+                OR LOWER(ISNULL(AgentName, '')) LIKE '%' + LOWER(LTRIM(RTRIM({{1}}))) + '%'
+           ));
+    END
+
+    IF COL_LENGTH('{tableName}', 'LastUpdatedAt') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET LastUpdatedAt = GETDATE()
+        WHERE ({{2}} > 0 AND AgentId = {{2}})
+           OR ({{2}} <= 0 AND (
+                LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = LOWER(LTRIM(RTRIM({{1}})))
+                OR LOWER(ISNULL(AgentName, '')) LIKE '%' + LOWER(LTRIM(RTRIM({{1}}))) + '%'
+           ));
+    END
+END";
+                await _context.Database.ExecuteSqlRawAsync(sql, chatStatus, agentName, userId);
             }
         }
 
@@ -1754,6 +1852,81 @@ END";
 
             _context.Agents.Add(newRow);
             await _context.SaveChangesAsync();
+        }
+
+        private async Task UpdateAgentRowsStatusAsync(int userId, string agentName, string agentStatus, string chatStatus)
+        {
+            var persistedAgentName = ResolvePersistedAgentName(agentName, userId);
+            var hasUsableAgentName = IsUsableAgentName(persistedAgentName);
+            var query = _context.Agents.AsQueryable();
+
+            if (userId > 0 || hasUsableAgentName)
+            {
+                query = query.Where(a =>
+                    (userId > 0 && (a.AgentID == userId || a.UserID == userId))
+                    || (hasUsableAgentName
+                        && (a.AgentName == persistedAgentName
+                            || EF.Functions.Like(a.AgentName, $"%{persistedAgentName}%"))));
+            }
+
+            var rows = await query.ToListAsync();
+            if (rows.Count == 0) return;
+
+            var shouldSave = false;
+            foreach (var row in rows)
+            {
+                if (!string.Equals(row.AgentStatus, agentStatus, StringComparison.OrdinalIgnoreCase))
+                {
+                    row.AgentStatus = agentStatus;
+                    shouldSave = true;
+                }
+
+                if (!string.Equals(row.ChatStatus, chatStatus, StringComparison.OrdinalIgnoreCase))
+                {
+                    row.ChatStatus = chatStatus;
+                    shouldSave = true;
+                }
+            }
+
+            if (shouldSave)
+                await _context.SaveChangesAsync();
+        }
+
+        private async Task ForceAgentLogoutStatusAsync(int userId, int staffId, string agentName, string agentStatus, string chatStatus)
+        {
+            var persistedAgentName = ResolvePersistedAgentName(agentName, userId);
+            var likeName = string.IsNullOrWhiteSpace(persistedAgentName) ? string.Empty : $"%{persistedAgentName}%";
+
+            var agentsSql = @"
+UPDATE dbo.Agents
+SET AgentStatus = {0},
+    ChatStatus = {1}
+WHERE ({2} > 0 AND (AgentID = {2} OR UserID = {2}))
+   OR ({3} > 0 AND (AgentID = {3} OR UserID = {3}))
+   OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({4})))
+   OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {5});";
+
+            await _context.Database.ExecuteSqlRawAsync(agentsSql, agentStatus, chatStatus, userId, staffId, persistedAgentName, likeName);
+
+            for (var slot = 1; slot <= 3; slot++)
+            {
+                var tableName = $"dbo.ChatSlot_{slot}";
+                var slotsSql = $@"
+IF OBJECT_ID('{tableName}', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('{tableName}', 'ChatStatus') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET ChatStatus = {{0}}
+        WHERE ({{1}} > 0 AND AgentId = {{1}})
+           OR ({{2}} > 0 AND AgentId = {{2}})
+           OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({{3}})))
+           OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {{4}});
+    END
+END";
+
+                await _context.Database.ExecuteSqlRawAsync(slotsSql, chatStatus, userId, staffId, persistedAgentName, likeName);
+            }
         }
 
         private string ResolvePersistedAgentName(string requestedAgentName, int userId)

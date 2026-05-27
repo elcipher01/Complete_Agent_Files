@@ -365,6 +365,11 @@ namespace NextHorizon.Controllers
         public async Task<IActionResult> Logout()
         {
             var staffId = HttpContext.Session.GetInt32("StaffId");
+            var userId = HttpContext.Session.GetInt32("UserId") ?? 0;
+            var agentName = HttpContext.Session.GetString("FullName") ?? HttpContext.Session.GetString("Username") ?? string.Empty;
+            var staffIdValue = staffId ?? 0;
+
+            await SetAgentStatusToEosAsync(userId, staffIdValue, agentName);
             
             if (staffId.HasValue)
             {
@@ -412,6 +417,150 @@ namespace NextHorizon.Controllers
             catch (Exception ex)
             {
                 System.Diagnostics.Debug.WriteLine($"Failed to log admin action: {ex.Message}");
+            }
+        }
+
+        private async Task SetAgentStatusToEosAsync(int userId, int staffId, string agentName)
+        {
+            if (userId <= 0 && staffId <= 0 && string.IsNullOrWhiteSpace(agentName))
+            {
+                return;
+            }
+
+            try
+            {
+                using (var connection = new SqlConnection(_connectionString))
+                {
+                    await connection.OpenAsync();
+
+                    var agentNames = new List<string>();
+                    if (!string.IsNullOrWhiteSpace(agentName))
+                    {
+                        agentNames.Add(agentName.Trim());
+                    }
+
+                    using (var lookup = new SqlCommand(@"
+SELECT TOP 1 s.username, s.first_name, s.last_name
+FROM staff_info s
+WHERE (@StaffId > 0 AND s.staff_id = @StaffId)
+   OR (@UserId > 0 AND s.user_id = @UserId);", connection))
+                    {
+                        lookup.Parameters.AddWithValue("@StaffId", staffId);
+                        lookup.Parameters.AddWithValue("@UserId", userId);
+
+                        using (var reader = await lookup.ExecuteReaderAsync())
+                        {
+                            if (await reader.ReadAsync())
+                            {
+                                var username = reader["username"]?.ToString();
+                                var firstName = reader["first_name"]?.ToString();
+                                var lastName = reader["last_name"]?.ToString();
+                                var fullName = string.Join(" ", new[] { firstName, lastName }.Where(s => !string.IsNullOrWhiteSpace(s))).Trim();
+
+                                if (!string.IsNullOrWhiteSpace(username))
+                                    agentNames.Add(username.Trim());
+                                if (!string.IsNullOrWhiteSpace(fullName))
+                                    agentNames.Add(fullName);
+                            }
+                        }
+                    }
+
+                    agentNames = agentNames
+                        .Where(name => !string.IsNullOrWhiteSpace(name))
+                        .Select(name => name.Trim())
+                        .Distinct(StringComparer.OrdinalIgnoreCase)
+                        .ToList();
+
+                    var agentNameConditions = agentNames
+                        .Select((_, index) => $"LTRIM(RTRIM(ISNULL(AgentName,''))) = @AgentName{index}")
+                        .ToList();
+                    var agentNameFilter = agentNameConditions.Count > 0
+                        ? $" OR ({string.Join(" OR ", agentNameConditions)})"
+                        : string.Empty;
+
+                    var agentUpdateSql = $@"
+UPDATE dbo.Agents
+SET AgentStatus = 'EOS',
+    ChatStatus = 'Unavailable'
+WHERE (@UserId > 0 AND (AgentID = @UserId OR UserID = @UserId))
+   OR (@StaffId > 0 AND (AgentID = @StaffId OR UserID = @StaffId))
+{agentNameFilter};";
+
+                    using (var command = new SqlCommand(agentUpdateSql, connection))
+                    {
+                        command.Parameters.AddWithValue("@UserId", userId);
+                        command.Parameters.AddWithValue("@StaffId", staffId);
+                        for (var index = 0; index < agentNames.Count; index++)
+                        {
+                            command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
+                        }
+                        await command.ExecuteNonQueryAsync();
+                    }
+
+                    for (var slot = 1; slot <= 3; slot++)
+                    {
+                        var tableName = $"dbo.ChatSlot_{slot}";
+                        var slotNameFilter = agentNameConditions.Count > 0
+                            ? $" OR ({string.Join(" OR ", agentNameConditions)})"
+                            : string.Empty;
+
+                        var slotUpdateSql = $@"
+IF OBJECT_ID('{tableName}', 'U') IS NOT NULL
+BEGIN
+    IF COL_LENGTH('{tableName}', 'AgentStatus') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET AgentStatus = 'EOS'
+        WHERE (@UserId > 0 AND AgentId = @UserId)
+           OR (@StaffId > 0 AND AgentId = @StaffId)
+{slotNameFilter};
+    END
+
+    IF COL_LENGTH('{tableName}', 'ChatStatus') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET ChatStatus = 'Unavailable'
+        WHERE (@UserId > 0 AND AgentId = @UserId)
+           OR (@StaffId > 0 AND AgentId = @StaffId)
+{slotNameFilter};
+    END
+
+    IF COL_LENGTH('{tableName}', 'AgentStatusLastUpdatedAt') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET AgentStatusLastUpdatedAt = GETDATE()
+        WHERE (@UserId > 0 AND AgentId = @UserId)
+           OR (@StaffId > 0 AND AgentId = @StaffId)
+{slotNameFilter};
+    END
+
+    IF COL_LENGTH('{tableName}', 'ChatStatusLastUpdatedAt') IS NOT NULL
+    BEGIN
+        UPDATE {tableName}
+        SET ChatStatusLastUpdatedAt = GETDATE()
+        WHERE (@UserId > 0 AND AgentId = @UserId)
+           OR (@StaffId > 0 AND AgentId = @StaffId)
+{slotNameFilter};
+    END
+END
+";
+
+                        using (var command = new SqlCommand(slotUpdateSql, connection))
+                        {
+                            command.Parameters.AddWithValue("@UserId", userId);
+                            command.Parameters.AddWithValue("@StaffId", staffId);
+                            for (var index = 0; index < agentNames.Count; index++)
+                            {
+                                command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
+                            }
+                            await command.ExecuteNonQueryAsync();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to set EOS on logout: {ex.Message}");
             }
         }
 
