@@ -1325,6 +1325,7 @@ namespace NextHorizon.Controllers
             {
                 var staffId = HttpContext.Session.GetInt32("StaffId") ?? 0;
                 var adminName = HttpContext.Session.GetString("Username") ?? "System";
+                var emailDetails = await GetPayoutEmailDetailsAsync(request.WithdrawalId);
 
                 using (var connection = new SqlConnection(_connectionString))
                 {
@@ -1352,6 +1353,19 @@ namespace NextHorizon.Controllers
                                     status == "Success" ? "Success" : "Failed",
                                     $"Amount: {request.Amount}, Reason: {request.Reason}");
 
+                                if (status == "Success")
+                                {
+                                    var emailSent = await SendFinanceRequestEmailAsync(
+                                        emailDetails,
+                                        "Payout",
+                                        $"Withdrawal #{request.WithdrawalId} - {request.Amount:C}",
+                                        request.Action,
+                                        request.Reason,
+                                        adminName);
+
+                                    message = AppendEmailStatus(message, emailDetails.Email, emailSent);
+                                }
+
                                 return Json(new { success = status == "Success", message = message });
                             }
                         }
@@ -1373,6 +1387,7 @@ namespace NextHorizon.Controllers
             {
                 var staffId = HttpContext.Session.GetInt32("StaffId") ?? 0;
                 var adminName = HttpContext.Session.GetString("Username") ?? "System";
+                var emailDetails = await GetDiscountEmailDetailsAsync(request.DiscountId);
 
                 using (var connection = new SqlConnection(_connectionString))
                 {
@@ -1399,6 +1414,22 @@ namespace NextHorizon.Controllers
                                     $"Discount #{request.DiscountId}",
                                     status == "Success" ? "Success" : "Failed",
                                     $"Product: {request.ProductName}, Reason: {request.Reason}");
+
+                                if (status == "Success")
+                                {
+                                    var itemName = !string.IsNullOrWhiteSpace(emailDetails.ItemName)
+                                        ? emailDetails.ItemName
+                                        : $"Discount #{request.DiscountId}";
+                                    var emailSent = await SendFinanceRequestEmailAsync(
+                                        emailDetails,
+                                        "Discount",
+                                        itemName,
+                                        request.Action,
+                                        request.Reason,
+                                        adminName);
+
+                                    message = AppendEmailStatus(message, emailDetails.Email, emailSent);
+                                }
 
                                 return Json(new { success = status == "Success", message = message });
                             }
@@ -1799,6 +1830,7 @@ namespace NextHorizon.Controllers
                 var adminName = HttpContext.Session.GetString("Username") ?? "System";
                 var ipAddress = HttpContext.Connection.RemoteIpAddress?.ToString();
                 var userAgent = Request.Headers["User-Agent"].ToString();
+                var emailDetails = await GetProductEmailDetailsAsync(request.ProductId);
 
                 using (var connection = new SqlConnection(_connectionString))
                 {
@@ -1820,6 +1852,22 @@ namespace NextHorizon.Controllers
                             {
                                 var status = reader["Status"].ToString();
                                 var message = reader["Message"].ToString();
+
+                                if (status == "Success")
+                                {
+                                    var itemName = !string.IsNullOrWhiteSpace(emailDetails.ItemName)
+                                        ? emailDetails.ItemName
+                                        : $"Product #{request.ProductId}";
+                                    var emailSent = await SendFinanceRequestEmailAsync(
+                                        emailDetails,
+                                        "Product",
+                                        itemName,
+                                        request.Action,
+                                        request.Reason,
+                                        adminName);
+
+                                    message = AppendEmailStatus(message, emailDetails.Email, emailSent);
+                                }
 
                                 return Json(new { success = status == "Success", message = message });
                             }
@@ -1868,6 +1916,233 @@ namespace NextHorizon.Controllers
             {
                 System.Diagnostics.Debug.WriteLine($"Failed to log admin action: {ex.Message}");
             }
+        }
+
+        private sealed class FinanceEmailDetails
+        {
+            public string Email { get; set; } = string.Empty;
+            public string RecipientName { get; set; } = string.Empty;
+            public string ItemName { get; set; } = string.Empty;
+        }
+
+        private static string ToFinanceEmailStatus(string action)
+        {
+            return string.Equals(action, "approve", StringComparison.OrdinalIgnoreCase)
+                ? "Approved"
+                : "Declined";
+        }
+
+        private string AppendEmailStatus(string message, string email, bool emailSent)
+        {
+            if (string.IsNullOrWhiteSpace(email))
+            {
+                return $"{message} Email notification was not sent because no seller email was found.";
+            }
+
+            return emailSent
+                ? $"{message} Email notification sent to seller."
+                : $"{message} Warning: Email notification failed to send.";
+        }
+
+        private async Task<bool> SendFinanceRequestEmailAsync(FinanceEmailDetails details, string requestType, string itemName, string action, string note, string adminName)
+        {
+            if (string.IsNullOrWhiteSpace(details.Email))
+            {
+                return false;
+            }
+
+            return await _emailService.SendFinanceRequestStatusEmailAsync(
+                details.Email,
+                details.RecipientName,
+                requestType,
+                itemName,
+                ToFinanceEmailStatus(action),
+                note ?? string.Empty,
+                adminName);
+        }
+
+        private async Task<FinanceEmailDetails> GetPayoutEmailDetailsAsync(long withdrawalId)
+        {
+            var details = new FinanceEmailDetails();
+
+            try
+            {
+                using (var connection = new SqlConnection(_connectionString))
+                using (var command = new SqlCommand("sp_GetPendingPayouts", connection))
+                {
+                    command.CommandType = CommandType.StoredProcedure;
+                    await connection.OpenAsync();
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            if (reader.GetInt64(reader.GetOrdinal("withdrawal_id")) != withdrawalId)
+                            {
+                                continue;
+                            }
+
+                            details.Email = reader.IsDBNull(reader.GetOrdinal("seller_email")) ? "" : reader.GetString(reader.GetOrdinal("seller_email"));
+                            details.RecipientName = reader.IsDBNull(reader.GetOrdinal("shop_name")) ? "" : reader.GetString(reader.GetOrdinal("shop_name"));
+                            details.ItemName = $"Withdrawal #{withdrawalId}";
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get payout email details: {ex.Message}");
+            }
+
+            return details;
+        }
+
+        private async Task<FinanceEmailDetails> GetDiscountEmailDetailsAsync(int discountId)
+        {
+            var details = new FinanceEmailDetails();
+            var userId = 0;
+
+            try
+            {
+                using (var connection = new SqlConnection(_connectionString))
+                {
+                    using (var command = new SqlCommand("sp_GetPendingDiscounts", connection))
+                    {
+                        command.CommandType = CommandType.StoredProcedure;
+                        await connection.OpenAsync();
+
+                        using (var reader = await command.ExecuteReaderAsync())
+                        {
+                            while (await reader.ReadAsync())
+                            {
+                                if (reader.GetInt32(reader.GetOrdinal("id")) != discountId)
+                                {
+                                    continue;
+                                }
+
+                                userId = reader.IsDBNull(reader.GetOrdinal("user_id")) ? 0 : reader.GetInt32(reader.GetOrdinal("user_id"));
+                                details.RecipientName = reader.IsDBNull(reader.GetOrdinal("ShopName")) ? "" : reader.GetString(reader.GetOrdinal("ShopName"));
+                                details.ItemName = reader.IsDBNull(reader.GetOrdinal("ProductName")) ? $"Discount #{discountId}" : reader.GetString(reader.GetOrdinal("ProductName"));
+                                break;
+                            }
+                        }
+                    }
+
+                    if (userId > 0)
+                    {
+                        using (var command = new SqlCommand("SELECT TOP 1 email FROM users WHERE user_id = @UserId", connection))
+                        {
+                            command.Parameters.AddWithValue("@UserId", userId);
+                            details.Email = (await command.ExecuteScalarAsync())?.ToString() ?? "";
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get discount email details: {ex.Message}");
+            }
+
+            return details;
+        }
+
+        private async Task<FinanceEmailDetails> GetProductEmailDetailsAsync(int productId)
+        {
+            var details = await GetPendingProductSummaryAsync(productId);
+            var queries = new[]
+            {
+                @"
+                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                FROM Products p
+                INNER JOIN Sellers s ON p.seller_id = s.seller_id
+                INNER JOIN users u ON s.user_id = u.user_id
+                WHERE p.product_id = @ProductId",
+                @"
+                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                FROM Products p
+                INNER JOIN Sellers s ON p.SellerId = s.seller_id
+                INNER JOIN users u ON s.user_id = u.user_id
+                WHERE p.ProductId = @ProductId",
+                @"
+                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                FROM Product p
+                INNER JOIN Sellers s ON p.seller_id = s.seller_id
+                INNER JOIN users u ON s.user_id = u.user_id
+                WHERE p.product_id = @ProductId"
+            };
+
+            foreach (var query in queries)
+            {
+                try
+                {
+                    using (var connection = new SqlConnection(_connectionString))
+                    using (var command = new SqlCommand(query, connection))
+                    {
+                        command.Parameters.AddWithValue("@ProductId", productId);
+                        await connection.OpenAsync();
+
+                        using (var reader = await command.ExecuteReaderAsync())
+                        {
+                            if (await reader.ReadAsync())
+                            {
+                                details.Email = reader["email"]?.ToString() ?? "";
+                                var shopName = reader["ShopName"]?.ToString() ?? "";
+                                if (!string.IsNullOrWhiteSpace(shopName))
+                                {
+                                    details.RecipientName = shopName;
+                                }
+
+                                return details;
+                            }
+                        }
+                    }
+                }
+                catch (Exception ex)
+                {
+                    System.Diagnostics.Debug.WriteLine($"Product email lookup attempt failed: {ex.Message}");
+                }
+            }
+
+            return details;
+        }
+
+        private async Task<FinanceEmailDetails> GetPendingProductSummaryAsync(int productId)
+        {
+            var details = new FinanceEmailDetails();
+
+            try
+            {
+                using (var connection = new SqlConnection(_connectionString))
+                using (var command = new SqlCommand("sp_GetPendingProducts", connection))
+                {
+                    command.CommandType = CommandType.StoredProcedure;
+                    await connection.OpenAsync();
+
+                    using (var reader = await command.ExecuteReaderAsync())
+                    {
+                        while (await reader.ReadAsync())
+                        {
+                            if (reader.GetInt32(reader.GetOrdinal("ProductId")) != productId)
+                            {
+                                continue;
+                            }
+
+                            details.ItemName = reader.IsDBNull(reader.GetOrdinal("ProductName")) ? $"Product #{productId}" : reader.GetString(reader.GetOrdinal("ProductName"));
+                            details.RecipientName = reader.IsDBNull(reader.GetOrdinal("ShopName"))
+                                ? (reader.IsDBNull(reader.GetOrdinal("SellerName")) ? "" : reader.GetString(reader.GetOrdinal("SellerName")))
+                                : reader.GetString(reader.GetOrdinal("ShopName"));
+                            break;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to get product summary: {ex.Message}");
+            }
+
+            return details;
         }
 
         // Logistics - Accessible by SuperAdmin, Admin, and Logistics team
@@ -4466,7 +4741,7 @@ namespace NextHorizon.Controllers
                 }
                 //todo chatlist column
                 // Fetch session details for the Agents log table.
-                string clientName = "", category = "", previewQ = "";
+                string clientName = "N/A", category = "General", previewQ = "No preview available";
                 using (var cmd = new SqlCommand(
                     "SELECT UserType, Category, Question FROM SupportFAQs WHERE Id = @Id", connection))
                 {
@@ -4477,9 +4752,14 @@ namespace NextHorizon.Controllers
                         var isSeller = (reader["UserType"]?.ToString() ?? "").Equals("Seller", StringComparison.OrdinalIgnoreCase);
                         clientName = (isSeller ? "Seller #" : "Customer #") + model.SessionId;
                         category = reader.IsDBNull(reader.GetOrdinal("Category")) ? "General" : reader.GetString(reader.GetOrdinal("Category"));
-                        previewQ = reader.IsDBNull(reader.GetOrdinal("Question")) ? "" : reader.GetString(reader.GetOrdinal("Question"));
+                        previewQ = reader.IsDBNull(reader.GetOrdinal("Question")) ? "No preview available" : reader.GetString(reader.GetOrdinal("Question"));
                     }
                 }
+
+                clientName = string.IsNullOrWhiteSpace(clientName) ? "N/A" : clientName.Trim();
+                category = string.IsNullOrWhiteSpace(category) ? "General" : category.Trim();
+                previewQ = string.IsNullOrWhiteSpace(previewQ) ? "No preview available" : previewQ.Trim();
+                var safeAgentName = string.IsNullOrWhiteSpace(model.AgentName) ? $"Agent {model.AgentId}" : model.AgentName.Trim();
 
                 // Insert into Agents audit / activity table.
                 using (var cmd = new SqlCommand(@"
@@ -4492,7 +4772,7 @@ namespace NextHorizon.Controllers
                     connection))
                 {
                     cmd.Parameters.AddWithValue("@ConversationID", model.SessionId);
-                    cmd.Parameters.AddWithValue("@AgentName", model.AgentName);
+                    cmd.Parameters.AddWithValue("@AgentName", safeAgentName);
                     cmd.Parameters.AddWithValue("@ClientName", clientName);
                     cmd.Parameters.AddWithValue("@Category", category);
                     cmd.Parameters.AddWithValue("@PreviewQuestion", previewQ);
@@ -5328,14 +5608,33 @@ namespace NextHorizon.Controllers
                 {
                     // First, get the current password hash
                     var getHashCmd = new SqlCommand(@"
-                            SELECT u.password_hash 
+                            SELECT 
+                                u.password_hash,
+                                u.email,
+                                CONCAT(ISNULL(s.first_name, ''), ' ', ISNULL(s.last_name, '')) AS full_name
                             FROM users u
                             INNER JOIN staff_info s ON u.user_id = s.user_id
                             WHERE s.staff_id = @StaffId", connection);
                     getHashCmd.Parameters.AddWithValue("@StaffId", staffId);
 
                     await connection.OpenAsync();
-                    var currentHash = await getHashCmd.ExecuteScalarAsync() as string;
+                    string currentHash = null;
+                    string adminEmail = null;
+                    string adminFullName = adminName;
+
+                    using (var reader = await getHashCmd.ExecuteReaderAsync())
+                    {
+                        if (await reader.ReadAsync())
+                        {
+                            currentHash = reader["password_hash"]?.ToString();
+                            adminEmail = reader["email"]?.ToString();
+                            adminFullName = reader["full_name"]?.ToString()?.Trim();
+                            if (string.IsNullOrWhiteSpace(adminFullName))
+                            {
+                                adminFullName = adminName;
+                            }
+                        }
+                    }
 
                     // Verify current password
                     var verificationResult = VerifyPassword(currentHash, request.CurrentPassword);
@@ -5361,7 +5660,23 @@ namespace NextHorizon.Controllers
                             "Success",
                             "Password changed successfully");
 
-                        return Json(new { success = true, message = "Password changed successfully" });
+                        var emailSent = false;
+                        if (!string.IsNullOrWhiteSpace(adminEmail))
+                        {
+                            emailSent = await _emailService.SendAdminPasswordChangedEmailAsync(adminEmail, adminFullName, adminName);
+                        }
+
+                        var message = "Password changed successfully";
+                        if (emailSent)
+                        {
+                            message += ". Email notification sent.";
+                        }
+                        else if (!string.IsNullOrWhiteSpace(adminEmail))
+                        {
+                            message += ". Warning: Email notification failed to send.";
+                        }
+
+                        return Json(new { success = true, message = message });
                     }
                 }
             }

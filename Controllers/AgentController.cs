@@ -1217,14 +1217,8 @@ END";
             {
                 "inchat" => "Active",
                 "active" => "Active",
-                "available" => "Available",
-                "unavailable" => "Unavailable",
-                "break" => "Unavailable",
-                "lunch" => "Unavailable",
-                "eos" => "Unavailable",
-                "acw" => "Unavailable",
-                "resolved" => "Unavailable",
-                _ => "Available"
+                "resolved" => "Resolved",
+                _ => "Active"
             };
         }
 
@@ -1254,6 +1248,11 @@ END";
                 "available" => "Available",
                 _ => null
             };
+        }
+
+        private static string RequiredAgentText(string? value, string fallback)
+        {
+            return string.IsNullOrWhiteSpace(value) ? fallback : value.Trim();
         }
 
         private async Task SetConversationChatStatusAsync(int userId, string agentName, int conversationId, string chatStatus, int? chatSlot, string? notes)
@@ -1286,13 +1285,13 @@ END";
                     {
                         AgentID = userId > 0 ? userId : null,
                         ConversationID = conversationId,
-                        AgentName = fallbackAgentName,
-                        ClientName = conversation?.UserType ?? "N/A",
-                        Category = conversation?.Category ?? "N/A",
-                        PreviewQuestion = conversation?.Question ?? "Status update",
+                        AgentName = RequiredAgentText(fallbackAgentName, $"Agent {userId}"),
+                        ClientName = RequiredAgentText(conversation?.UserType, "N/A"),
+                        Category = RequiredAgentText(conversation?.Category, "N/A"),
+                        PreviewQuestion = RequiredAgentText(conversation?.Question, "Status update"),
                         ChatSlot = chatSlot.HasValue && chatSlot.Value >= 1 && chatSlot.Value <= 3 ? chatSlot.Value : 1,
-                        ChatStatus = persistedAgentChatStatus,
-                        AgentStatus = MapChatStatusToAgentStatus(persistedAgentChatStatus) ?? (string.IsNullOrWhiteSpace(latestAgent?.AgentStatus) ? "Available" : latestAgent.AgentStatus)
+                        ChatStatus = RequiredAgentText(persistedAgentChatStatus, "Active"),
+                        AgentStatus = RequiredAgentText(MapChatStatusToAgentStatus(persistedAgentChatStatus) ?? latestAgent?.AgentStatus, "Available")
                     };
 
                     _context.Agents.Add(createdRow);
@@ -1841,13 +1840,13 @@ END";
             var newRow = new Agent
             {
                 AgentID = userId > 0 ? userId : null,
-                AgentName = hasUsableAgentName ? persistedAgentName : $"Agent {userId}",
-                ClientName = latestAgent?.ClientName ?? "N/A",
-                Category = latestAgent?.Category ?? "N/A",
-                PreviewQuestion = latestAgent?.PreviewQuestion ?? "Status update",
+                AgentName = RequiredAgentText(hasUsableAgentName ? persistedAgentName : $"Agent {userId}", $"Agent {userId}"),
+                ClientName = RequiredAgentText(latestAgent?.ClientName, "N/A"),
+                Category = RequiredAgentText(latestAgent?.Category, "N/A"),
+                PreviewQuestion = RequiredAgentText(latestAgent?.PreviewQuestion, "Status update"),
                 ChatSlot = latestAgent?.ChatSlot ?? 1,
-                ChatStatus = latestAgent?.ChatStatus ?? "Available",
-                AgentStatus = agentStatus
+                ChatStatus = RequiredAgentText(latestAgent?.ChatStatus, "Active"),
+                AgentStatus = RequiredAgentText(agentStatus, "Available")
             };
 
             _context.Agents.Add(newRow);

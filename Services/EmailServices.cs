@@ -19,12 +19,12 @@ namespace NextHorizon.Services
         public EmailService(IConfiguration configuration)
         {
             _configuration = configuration;
-            _smtpServer = _configuration["EmailSettings:SmtpServer"];
+            _smtpServer = _configuration["EmailSettings:SmtpServer"]?.Trim();
             _smtpPort = int.Parse(_configuration["EmailSettings:SmtpPort"]);
-            _smtpUsername = _configuration["EmailSettings:SmtpUsername"];
-            _smtpPassword = _configuration["EmailSettings:SmtpPassword"];
-            _fromEmail = _configuration["EmailSettings:FromEmail"];
-            _fromName = _configuration["EmailSettings:FromName"];
+            _smtpUsername = _configuration["EmailSettings:SmtpUsername"]?.Trim();
+            _smtpPassword = _configuration["EmailSettings:SmtpPassword"]?.Trim();
+            _fromEmail = _configuration["EmailSettings:FromEmail"]?.Trim();
+            _fromName = _configuration["EmailSettings:FromName"]?.Trim();
         }
 
         public async Task<bool> SendOTPEmailAsync(string email, string name, string otpCode)
@@ -565,6 +565,68 @@ namespace NextHorizon.Services
             }
         }
 
+        public async Task<bool> SendFinanceRequestStatusEmailAsync(string email, string recipientName, string requestType, string itemName, string status, string note, string adminName)
+        {
+            try
+            {
+                var isApproved = string.Equals(status, "Approved", StringComparison.OrdinalIgnoreCase);
+                var safeRecipient = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(recipientName) ? "Seller" : recipientName);
+                var safeRequestType = WebUtility.HtmlEncode(requestType);
+                var safeItemName = WebUtility.HtmlEncode(itemName);
+                var safeStatus = WebUtility.HtmlEncode(status);
+                var safeNote = WebUtility.HtmlEncode(note ?? string.Empty);
+                var safeAdminName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(adminName) ? "Next Horizon" : adminName);
+                var accentColor = isApproved ? "#28a745" : "#dc3545";
+                var subject = $"{safeRequestType} {safeStatus} - Next Horizon";
+
+                var body = $@"
+                    <html>
+                    <head>
+                        <style>
+                            body {{ font-family: 'Poppins', Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }}
+                            .container {{ max-width: 540px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }}
+                            .header {{ background: {accentColor}; color: white; padding: 30px; text-align: center; }}
+                            .header h1 {{ font-size: 2.5rem; margin: 0; }}
+                            .header p {{ font-size: 0.75rem; letter-spacing: 4px; text-transform: uppercase; opacity: 0.7; margin: 0; }}
+                            .content {{ padding: 40px; }}
+                            .status {{ color: {accentColor}; font-weight: 700; }}
+                            .info-box {{ background: #f8f9fa; border-radius: 15px; padding: 20px; margin: 24px 0; }}
+                            .footer {{ background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #6c757d; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class='container'>
+                            <div class='header'>
+                                <h1>NH</h1>
+                                <p>Next Horizon</p>
+                            </div>
+                            <div class='content'>
+                                <h2>Hello {safeRecipient},</h2>
+                                <p>Your <strong>{safeRequestType}</strong> request has been <span class='status'>{safeStatus}</span>.</p>
+                                <div class='info-box'>
+                                    <p><strong>Request:</strong> {safeItemName}</p>
+                                    <p><strong>Processed by:</strong> {safeAdminName}</p>
+                                    {(string.IsNullOrWhiteSpace(safeNote) ? "" : $"<p><strong>Note:</strong> {safeNote}</p>")}
+                                </div>
+                                <p>Please sign in to your seller account for more details.</p>
+                            </div>
+                            <div class='footer'>
+                                <p>&copy; 2026 Next Horizon. All rights reserved.</p>
+                                <p>This is an automated message, please do not reply.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>";
+
+                return await SendEmailAsync(email, subject, body);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Finance request status email failed: {ex.Message}");
+                return false;
+            }
+        }
+
         public async Task<bool> SendAdminRevokedEmailAsync(string email, string firstName, string lastName, string userType, string reason, string revokedByAdmin)
         {
             try
@@ -639,6 +701,66 @@ namespace NextHorizon.Services
             catch (Exception ex)
             {
                 Console.WriteLine($"Admin revocation email failed: {ex.Message}");
+                return false;
+            }
+        }
+
+        public async Task<bool> SendAdminPasswordChangedEmailAsync(string email, string fullName, string adminName)
+        {
+            try
+            {
+                var safeName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(fullName) ? "Admin" : fullName);
+                var safeAdminName = WebUtility.HtmlEncode(string.IsNullOrWhiteSpace(adminName) ? "System" : adminName);
+                var changedAt = DateTime.Now.ToString("MMMM dd, yyyy hh:mm tt");
+                var subject = "Your Admin Password Was Changed - Next Horizon";
+
+                var body = $@"
+                    <html>
+                    <head>
+                        <style>
+                            body {{ font-family: 'Poppins', Arial, sans-serif; background-color: #f4f7f6; margin: 0; padding: 20px; }}
+                            .container {{ max-width: 550px; margin: 0 auto; background: white; border-radius: 20px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,0.08); }}
+                            .header {{ background: #000; color: white; padding: 30px; text-align: center; }}
+                            .header h1 {{ font-size: 2.5rem; margin: 0; }}
+                            .header p {{ font-size: 0.75rem; letter-spacing: 4px; text-transform: uppercase; opacity: 0.7; margin: 0; }}
+                            .content {{ padding: 40px; }}
+                            .info-box {{ background: #f8f9fa; border-radius: 15px; padding: 20px; margin: 24px 0; }}
+                            .warning {{ background: #fff3cd; border-left: 4px solid #ffc107; padding: 15px; margin: 20px 0; border-radius: 8px; }}
+                            .footer {{ background: #f8f9fa; padding: 20px; text-align: center; font-size: 12px; color: #6c757d; }}
+                        </style>
+                    </head>
+                    <body>
+                        <div class='container'>
+                            <div class='header'>
+                                <h1>NH</h1>
+                                <p>Next Horizon</p>
+                            </div>
+                            <div class='content'>
+                                <h2>Password Changed</h2>
+                                <p>Hello <strong>{safeName}</strong>,</p>
+                                <p>Your Next Horizon Admin Portal password was changed successfully.</p>
+                                <div class='info-box'>
+                                    <p><strong>Changed by:</strong> {safeAdminName}</p>
+                                    <p><strong>Date and time:</strong> {changedAt}</p>
+                                </div>
+                                <div class='warning'>
+                                    <strong>Security notice:</strong>
+                                    <p style='margin-bottom: 0;'>If you did not make this change, contact a SuperAdmin or support immediately.</p>
+                                </div>
+                            </div>
+                            <div class='footer'>
+                                <p>&copy; 2026 Next Horizon. All rights reserved.</p>
+                                <p>This is an automated message, please do not reply.</p>
+                            </div>
+                        </div>
+                    </body>
+                    </html>";
+
+                return await SendEmailAsync(email, subject, body);
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"Admin password changed email failed: {ex.Message}");
                 return false;
             }
         }
