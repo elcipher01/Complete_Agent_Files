@@ -1,4 +1,4 @@
-﻿using Microsoft.AspNetCore.Mvc;
+﻿    using Microsoft.AspNetCore.Mvc;
 using Microsoft.Data.SqlClient;
 using Microsoft.Extensions.Configuration;
 using Microsoft.AspNetCore.Identity;
@@ -472,7 +472,7 @@ WHERE (@StaffId > 0 AND s.staff_id = @StaffId)
                         .ToList();
 
                     var agentNameConditions = agentNames
-                        .Select((_, index) => $"LTRIM(RTRIM(ISNULL(AgentName,''))) = @AgentName{index}")
+                        .Select((_, index) => $"LTRIM(RTRIM(ISNULL(AgentName,''))) = @AgentName{index} OR LTRIM(RTRIM(ISNULL(AgentName,''))) LIKE @AgentNameLike{index}")
                         .ToList();
                     var agentNameFilter = agentNameConditions.Count > 0
                         ? $" OR ({string.Join(" OR ", agentNameConditions)})"
@@ -493,6 +493,7 @@ WHERE (@UserId > 0 AND (AgentID = @UserId OR UserID = @UserId))
                         for (var index = 0; index < agentNames.Count; index++)
                         {
                             command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
+                            command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{agentNames[index]}%");
                         }
                         await command.ExecuteNonQueryAsync();
                     }
@@ -552,6 +553,7 @@ END
                             for (var index = 0; index < agentNames.Count; index++)
                             {
                                 command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
+                                command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{agentNames[index]}%");
                             }
                             await command.ExecuteNonQueryAsync();
                         }
