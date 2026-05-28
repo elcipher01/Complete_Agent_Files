@@ -472,7 +472,7 @@ WHERE (@StaffId > 0 AND s.staff_id = @StaffId)
                         .ToList();
 
                     var agentNameConditions = agentNames
-                        .Select((_, index) => $"LTRIM(RTRIM(ISNULL(AgentName,''))) = @AgentName{index} OR LTRIM(RTRIM(ISNULL(AgentName,''))) LIKE @AgentNameLike{index}")
+                        .Select((_, index) => $"LOWER(LTRIM(RTRIM(ISNULL(AgentName,'')))) = @AgentName{index} OR LOWER(LTRIM(RTRIM(ISNULL(AgentName,'')))) LIKE @AgentNameLike{index} OR REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName,'')))), ' ', '') = @AgentNameNoSpace{index}")
                         .ToList();
                     var agentNameFilter = agentNameConditions.Count > 0
                         ? $" OR ({string.Join(" OR ", agentNameConditions)})"
@@ -492,8 +492,11 @@ WHERE (@UserId > 0 AND (AgentID = @UserId OR UserID = @UserId))
                         command.Parameters.AddWithValue("@StaffId", staffId);
                         for (var index = 0; index < agentNames.Count; index++)
                         {
-                            command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
-                            command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{agentNames[index]}%");
+                            var normalizedName = agentNames[index].ToLowerInvariant();
+                            var normalizedNoSpace = normalizedName.Replace(" ", string.Empty);
+                            command.Parameters.AddWithValue($"@AgentName{index}", normalizedName);
+                            command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{normalizedName}%");
+                            command.Parameters.AddWithValue($"@AgentNameNoSpace{index}", normalizedNoSpace);
                         }
                         await command.ExecuteNonQueryAsync();
                     }
@@ -508,40 +511,86 @@ WHERE (@UserId > 0 AND (AgentID = @UserId OR UserID = @UserId))
                         var slotUpdateSql = $@"
 IF OBJECT_ID('{tableName}', 'U') IS NOT NULL
 BEGIN
+    DECLARE @HasUserId BIT = CASE WHEN COL_LENGTH('{tableName}', 'UserID') IS NULL THEN 0 ELSE 1 END;
+
     IF COL_LENGTH('{tableName}', 'AgentStatus') IS NOT NULL
     BEGIN
-        UPDATE {tableName}
-        SET AgentStatus = 'EOS'
-        WHERE (@UserId > 0 AND AgentId = @UserId)
-           OR (@StaffId > 0 AND AgentId = @StaffId)
-{slotNameFilter};
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatus = 'EOS'
+            WHERE (@UserId > 0 AND (AgentId = @UserId OR UserID = @UserId))
+               OR (@StaffId > 0 AND (AgentId = @StaffId OR UserID = @StaffId))
+ {slotNameFilter};
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatus = 'EOS'
+            WHERE (@UserId > 0 AND AgentId = @UserId)
+               OR (@StaffId > 0 AND AgentId = @StaffId)
+ {slotNameFilter};
+        END
     END
 
     IF COL_LENGTH('{tableName}', 'ChatStatus') IS NOT NULL
     BEGIN
-        UPDATE {tableName}
-        SET ChatStatus = 'Unavailable'
-        WHERE (@UserId > 0 AND AgentId = @UserId)
-           OR (@StaffId > 0 AND AgentId = @StaffId)
-{slotNameFilter};
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatus = 'Unavailable'
+            WHERE (@UserId > 0 AND (AgentId = @UserId OR UserID = @UserId))
+               OR (@StaffId > 0 AND (AgentId = @StaffId OR UserID = @StaffId))
+ {slotNameFilter};
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatus = 'Unavailable'
+            WHERE (@UserId > 0 AND AgentId = @UserId)
+               OR (@StaffId > 0 AND AgentId = @StaffId)
+ {slotNameFilter};
+        END
     END
 
     IF COL_LENGTH('{tableName}', 'AgentStatusLastUpdatedAt') IS NOT NULL
     BEGIN
-        UPDATE {tableName}
-        SET AgentStatusLastUpdatedAt = GETDATE()
-        WHERE (@UserId > 0 AND AgentId = @UserId)
-           OR (@StaffId > 0 AND AgentId = @StaffId)
-{slotNameFilter};
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatusLastUpdatedAt = GETDATE()
+            WHERE (@UserId > 0 AND (AgentId = @UserId OR UserID = @UserId))
+               OR (@StaffId > 0 AND (AgentId = @StaffId OR UserID = @StaffId))
+ {slotNameFilter};
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatusLastUpdatedAt = GETDATE()
+            WHERE (@UserId > 0 AND AgentId = @UserId)
+               OR (@StaffId > 0 AND AgentId = @StaffId)
+ {slotNameFilter};
+        END
     END
 
     IF COL_LENGTH('{tableName}', 'ChatStatusLastUpdatedAt') IS NOT NULL
     BEGIN
-        UPDATE {tableName}
-        SET ChatStatusLastUpdatedAt = GETDATE()
-        WHERE (@UserId > 0 AND AgentId = @UserId)
-           OR (@StaffId > 0 AND AgentId = @StaffId)
-{slotNameFilter};
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatusLastUpdatedAt = GETDATE()
+            WHERE (@UserId > 0 AND (AgentId = @UserId OR UserID = @UserId))
+               OR (@StaffId > 0 AND (AgentId = @StaffId OR UserID = @StaffId))
+ {slotNameFilter};
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatusLastUpdatedAt = GETDATE()
+            WHERE (@UserId > 0 AND AgentId = @UserId)
+               OR (@StaffId > 0 AND AgentId = @StaffId)
+ {slotNameFilter};
+        END
     END
 END
 ";
@@ -550,10 +599,13 @@ END
                         {
                             command.Parameters.AddWithValue("@UserId", userId);
                             command.Parameters.AddWithValue("@StaffId", staffId);
-                            for (var index = 0; index < agentNames.Count; index++)
+                        for (var index = 0; index < agentNames.Count; index++)
                             {
-                                command.Parameters.AddWithValue($"@AgentName{index}", agentNames[index]);
-                                command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{agentNames[index]}%");
+                            var normalizedName = agentNames[index].ToLowerInvariant();
+                            var normalizedNoSpace = normalizedName.Replace(" ", string.Empty);
+                            command.Parameters.AddWithValue($"@AgentName{index}", normalizedName);
+                            command.Parameters.AddWithValue($"@AgentNameLike{index}", $"%{normalizedName}%");
+                            command.Parameters.AddWithValue($"@AgentNameNoSpace{index}", normalizedNoSpace);
                             }
                             await command.ExecuteNonQueryAsync();
                         }

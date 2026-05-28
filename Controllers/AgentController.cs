@@ -1894,7 +1894,11 @@ END";
         private async Task ForceAgentLogoutStatusAsync(int userId, int staffId, string agentName, string agentStatus, string chatStatus)
         {
             var persistedAgentName = ResolvePersistedAgentName(agentName, userId);
-            var likeName = string.IsNullOrWhiteSpace(persistedAgentName) ? string.Empty : $"%{persistedAgentName}%";
+            var normalizedAgentName = string.IsNullOrWhiteSpace(persistedAgentName) ? string.Empty : persistedAgentName.ToLowerInvariant();
+            var likeName = string.IsNullOrWhiteSpace(normalizedAgentName) ? string.Empty : $"%{normalizedAgentName}%";
+            var normalizedAgentNoSpace = string.IsNullOrWhiteSpace(normalizedAgentName)
+                ? string.Empty
+                : normalizedAgentName.Replace(" ", string.Empty);
 
             var agentsSql = @"
 UPDATE dbo.Agents
@@ -1902,10 +1906,11 @@ SET AgentStatus = {0},
     ChatStatus = {1}
 WHERE ({2} > 0 AND (AgentID = {2} OR UserID = {2}))
    OR ({3} > 0 AND (AgentID = {3} OR UserID = {3}))
-   OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({4})))
-   OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {5});";
+   OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {4})
+   OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {5})
+   OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {6});";
 
-            await _context.Database.ExecuteSqlRawAsync(agentsSql, agentStatus, chatStatus, userId, staffId, persistedAgentName, likeName);
+            await _context.Database.ExecuteSqlRawAsync(agentsSql, agentStatus, chatStatus, userId, staffId, normalizedAgentName, likeName, normalizedAgentNoSpace);
 
             for (var slot = 1; slot <= 3; slot++)
             {
@@ -1913,18 +1918,128 @@ WHERE ({2} > 0 AND (AgentID = {2} OR UserID = {2}))
                 var slotsSql = $@"
 IF OBJECT_ID('{tableName}', 'U') IS NOT NULL
 BEGIN
+    DECLARE @HasUserId BIT = CASE WHEN COL_LENGTH('{tableName}', 'UserID') IS NULL THEN 0 ELSE 1 END;
+
+    IF COL_LENGTH('{tableName}', 'AgentStatus') IS NOT NULL
+    BEGIN
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatus = {{0}}
+            WHERE ({{2}} > 0 AND (AgentId = {{2}} OR UserID = {{2}}))
+               OR ({{3}} > 0 AND (AgentId = {{3}} OR UserID = {{3}}))
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatus = {{0}}
+            WHERE ({{2}} > 0 AND AgentId = {{2}})
+               OR ({{3}} > 0 AND AgentId = {{3}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+    END
+
     IF COL_LENGTH('{tableName}', 'ChatStatus') IS NOT NULL
     BEGIN
-        UPDATE {tableName}
-        SET ChatStatus = {{0}}
-        WHERE ({{1}} > 0 AND AgentId = {{1}})
-           OR ({{2}} > 0 AND AgentId = {{2}})
-           OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({{3}})))
-           OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {{4}});
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatus = {{1}}
+            WHERE ({{2}} > 0 AND (AgentId = {{2}} OR UserID = {{2}}))
+               OR ({{3}} > 0 AND (AgentId = {{3}} OR UserID = {{3}}))
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatus = {{1}}
+            WHERE ({{2}} > 0 AND AgentId = {{2}})
+               OR ({{3}} > 0 AND AgentId = {{3}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+    END
+
+    IF COL_LENGTH('{tableName}', 'AgentStatusLastUpdatedAt') IS NOT NULL
+    BEGIN
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatusLastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND (AgentId = {{2}} OR UserID = {{2}}))
+               OR ({{3}} > 0 AND (AgentId = {{3}} OR UserID = {{3}}))
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET AgentStatusLastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND AgentId = {{2}})
+               OR ({{3}} > 0 AND AgentId = {{3}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+    END
+
+    IF COL_LENGTH('{tableName}', 'ChatStatusLastUpdatedAt') IS NOT NULL
+    BEGIN
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatusLastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND (AgentId = {{2}} OR UserID = {{2}}))
+               OR ({{3}} > 0 AND (AgentId = {{3}} OR UserID = {{3}}))
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET ChatStatusLastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND AgentId = {{2}})
+               OR ({{3}} > 0 AND AgentId = {{3}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) = {{4}})
+               OR (LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))) LIKE {{5}})
+               OR (REPLACE(LOWER(LTRIM(RTRIM(ISNULL(AgentName, '')))), ' ', '') = {{6}});
+        END
+    END
+
+    IF COL_LENGTH('{tableName}', 'LastUpdatedAt') IS NOT NULL
+    BEGIN
+        IF @HasUserId = 1
+        BEGIN
+            UPDATE {tableName}
+            SET LastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND (AgentId = {{2}} OR UserID = {{2}}))
+               OR ({{3}} > 0 AND (AgentId = {{3}} OR UserID = {{3}}))
+               OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({{4}})))
+               OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {{5}});
+        END
+        ELSE
+        BEGIN
+            UPDATE {tableName}
+            SET LastUpdatedAt = GETDATE()
+            WHERE ({{2}} > 0 AND AgentId = {{2}})
+               OR ({{3}} > 0 AND AgentId = {{3}})
+               OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) = LTRIM(RTRIM({{4}})))
+               OR (LTRIM(RTRIM(ISNULL(AgentName, ''))) LIKE {{5}});
+        END
     END
 END";
 
-                await _context.Database.ExecuteSqlRawAsync(slotsSql, chatStatus, userId, staffId, persistedAgentName, likeName);
+                await _context.Database.ExecuteSqlRawAsync(slotsSql, agentStatus, chatStatus, userId, staffId, normalizedAgentName, likeName, normalizedAgentNoSpace);
             }
         }
 
