@@ -1355,10 +1355,18 @@ namespace NextHorizon.Controllers
 
                                 if (status == "Success")
                                 {
+                                    var itemName = $"Withdrawal #{request.WithdrawalId} - {request.Amount:C}";
+                                    await InsertFinanceRequestNotificationAsync(
+                                        emailDetails,
+                                        "Payout",
+                                        itemName,
+                                        request.Action,
+                                        request.Reason);
+
                                     var emailSent = await SendFinanceRequestEmailAsync(
                                         emailDetails,
                                         "Payout",
-                                        $"Withdrawal #{request.WithdrawalId} - {request.Amount:C}",
+                                        itemName,
                                         request.Action,
                                         request.Reason,
                                         adminName);
@@ -1420,6 +1428,13 @@ namespace NextHorizon.Controllers
                                     var itemName = !string.IsNullOrWhiteSpace(emailDetails.ItemName)
                                         ? emailDetails.ItemName
                                         : $"Discount #{request.DiscountId}";
+                                    await InsertFinanceRequestNotificationAsync(
+                                        emailDetails,
+                                        "Discount",
+                                        itemName,
+                                        request.Action,
+                                        request.Reason);
+
                                     var emailSent = await SendFinanceRequestEmailAsync(
                                         emailDetails,
                                         "Discount",
@@ -1858,6 +1873,13 @@ namespace NextHorizon.Controllers
                                     var itemName = !string.IsNullOrWhiteSpace(emailDetails.ItemName)
                                         ? emailDetails.ItemName
                                         : $"Product #{request.ProductId}";
+                                    await InsertFinanceRequestNotificationAsync(
+                                        emailDetails,
+                                        "Product",
+                                        itemName,
+                                        request.Action,
+                                        request.Reason);
+
                                     var emailSent = await SendFinanceRequestEmailAsync(
                                         emailDetails,
                                         "Product",
@@ -1920,6 +1942,7 @@ namespace NextHorizon.Controllers
 
         private sealed class FinanceEmailDetails
         {
+            public int SellerId { get; set; }
             public string Email { get; set; } = string.Empty;
             public string RecipientName { get; set; } = string.Empty;
             public string ItemName { get; set; } = string.Empty;
@@ -1961,6 +1984,54 @@ namespace NextHorizon.Controllers
                 adminName);
         }
 
+        private async Task InsertFinanceRequestNotificationAsync(FinanceEmailDetails details, string requestType, string itemName, string action, string note)
+        {
+            if (details.SellerId <= 0)
+            {
+                return;
+            }
+
+            try
+            {
+                var approved = string.Equals(action, "approve", StringComparison.OrdinalIgnoreCase);
+                var statusText = approved ? "approved" : "rejected";
+                var category = $"{requestType}{(approved ? "Approval" : "Rejection")}";
+                var safeItemName = string.IsNullOrWhiteSpace(itemName) ? requestType : itemName.Trim();
+                var message = requestType switch
+                {
+                    "Payout" => $"Your payout request ({safeItemName}) has been {statusText}.",
+                    "Discount" => $"Your discount request for '{safeItemName}' has been {statusText}.",
+                    "Product" => $"Your product '{safeItemName}' has been {statusText}.",
+                    _ => $"Your {requestType.ToLower()} request for '{safeItemName}' has been {statusText}."
+                };
+
+                if (!approved && !string.IsNullOrWhiteSpace(note))
+                {
+                    message += $"\n\nReason: {note}";
+                }
+
+                using (var connection = new SqlConnection(_connectionString))
+                using (var cmd = new SqlCommand(@"
+                    INSERT INTO Notifications
+                    (RecipientType, RecipientId, OrderId, Message, IsRead, CreatedAt, Category)
+                    VALUES
+                    ('Seller', @RecipientId, NULL, @Message, 0, @CreatedAt, @Category)", connection))
+                {
+                    cmd.Parameters.AddWithValue("@RecipientId", details.SellerId);
+                    cmd.Parameters.AddWithValue("@Message", message);
+                    cmd.Parameters.AddWithValue("@CreatedAt", DateTime.Now);
+                    cmd.Parameters.AddWithValue("@Category", category);
+
+                    await connection.OpenAsync();
+                    await cmd.ExecuteNonQueryAsync();
+                }
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Debug.WriteLine($"Failed to insert finance request notification: {ex.Message}");
+            }
+        }
+
         private async Task<FinanceEmailDetails> GetPayoutEmailDetailsAsync(long withdrawalId)
         {
             var details = new FinanceEmailDetails();
@@ -1982,10 +2053,11 @@ namespace NextHorizon.Controllers
                                 continue;
                             }
 
-                            details.Email = reader.IsDBNull(reader.GetOrdinal("seller_email")) ? "" : reader.GetString(reader.GetOrdinal("seller_email"));
-                            details.RecipientName = reader.IsDBNull(reader.GetOrdinal("shop_name")) ? "" : reader.GetString(reader.GetOrdinal("shop_name"));
-                            details.ItemName = $"Withdrawal #{withdrawalId}";
-                            break;
+                                details.Email = reader.IsDBNull(reader.GetOrdinal("seller_email")) ? "" : reader.GetString(reader.GetOrdinal("seller_email"));
+                                details.SellerId = reader.IsDBNull(reader.GetOrdinal("seller_id")) ? 0 : reader.GetInt32(reader.GetOrdinal("seller_id"));
+                                details.RecipientName = reader.IsDBNull(reader.GetOrdinal("shop_name")) ? "" : reader.GetString(reader.GetOrdinal("shop_name"));
+                                details.ItemName = $"Withdrawal #{withdrawalId}";
+                                break;
                         }
                     }
                 }
@@ -2036,6 +2108,13 @@ namespace NextHorizon.Controllers
                             command.Parameters.AddWithValue("@UserId", userId);
                             details.Email = (await command.ExecuteScalarAsync())?.ToString() ?? "";
                         }
+
+                        using (var command = new SqlCommand("SELECT TOP 1 seller_id FROM Sellers WHERE user_id = @UserId", connection))
+                        {
+                            command.Parameters.AddWithValue("@UserId", userId);
+                            var sellerId = await command.ExecuteScalarAsync();
+                            details.SellerId = sellerId == null || sellerId == DBNull.Value ? 0 : Convert.ToInt32(sellerId);
+                        }
                     }
                 }
             }
@@ -2053,19 +2132,19 @@ namespace NextHorizon.Controllers
             var queries = new[]
             {
                 @"
-                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                SELECT TOP 1 s.seller_id, u.email, COALESCE(s.business_name, '') AS ShopName
                 FROM Products p
                 INNER JOIN Sellers s ON p.seller_id = s.seller_id
                 INNER JOIN users u ON s.user_id = u.user_id
                 WHERE p.product_id = @ProductId",
                 @"
-                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                SELECT TOP 1 s.seller_id, u.email, COALESCE(s.business_name, '') AS ShopName
                 FROM Products p
                 INNER JOIN Sellers s ON p.SellerId = s.seller_id
                 INNER JOIN users u ON s.user_id = u.user_id
                 WHERE p.ProductId = @ProductId",
                 @"
-                SELECT TOP 1 u.email, COALESCE(s.business_name, '') AS ShopName
+                SELECT TOP 1 s.seller_id, u.email, COALESCE(s.business_name, '') AS ShopName
                 FROM Product p
                 INNER JOIN Sellers s ON p.seller_id = s.seller_id
                 INNER JOIN users u ON s.user_id = u.user_id
@@ -2086,6 +2165,7 @@ namespace NextHorizon.Controllers
                         {
                             if (await reader.ReadAsync())
                             {
+                                details.SellerId = reader["seller_id"] == DBNull.Value ? 0 : Convert.ToInt32(reader["seller_id"]);
                                 details.Email = reader["email"]?.ToString() ?? "";
                                 var shopName = reader["ShopName"]?.ToString() ?? "";
                                 if (!string.IsNullOrWhiteSpace(shopName))

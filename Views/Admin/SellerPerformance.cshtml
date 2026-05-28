@@ -7,6 +7,26 @@
 
 @section Styles {
     <link rel="stylesheet" href="~/css/admin_css/sellerPerformance.css" asp-append-version="true" />
+    <style>
+        .custom-tabs .btn {
+            border-bottom: 2px solid transparent;
+            transition: all 0.3s;
+        }
+
+        .custom-tabs .active-tab {
+            border-bottom: 2px solid #212529 !important;
+        }
+
+        .action-icons i {
+            font-size: 1.1rem;
+            transition: transform 0.2s;
+            display: inline-block;
+        }
+
+            .action-icons i:hover {
+                transform: scale(1.2);
+            }
+    </style>
 }
 
 <div class="container-fluid py-4 bg-light">
